@@ -824,6 +824,33 @@ router.get('/documentation', asyncHandler(async (req, res) => {
   }
 }));
 
+// Check if any TTYd client is currently on base-session
+router.get('/terminal/check-base-session', asyncHandler(async (req, res) => {
+  try {
+    const TmuxUtils = require('../utils/tmux-utils');
+    
+    // Use the new utility method to check base-session status
+    const isOnBaseSession = await TmuxUtils.isAnyClientOnBaseSession();
+    
+    res.json({
+      success: true,
+      isOnBaseSession: isOnBaseSession
+    });
+    
+  } catch (error) {
+    logger.error('Error checking base-session status:', {
+      error: error.message,
+      stack: error.stack
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check base-session status',
+      details: error.message
+    });
+  }
+}));
+
 // Serve documentation images
 router.get('/documentation/images/:filename', asyncHandler(async (req, res) => {
   try {

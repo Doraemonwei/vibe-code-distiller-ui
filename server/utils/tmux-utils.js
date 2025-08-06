@@ -314,119 +314,300 @@ class TmuxUtils {
     }
   }
   
-  static async getTTYdClients() {
-    try {
-      // Find TTYd process
-      const { stdout: ttydProcess } = await execAsync('pgrep -f "ttyd.aarch64"');
-      const ttydPid = ttydProcess.trim();
-      
-      if (!ttydPid) {
-        logger.warn('TTYd process not found');
-        return [];
-      }
-      
-      // Find tmux client processes under TTYd
-      const { stdout: clientPids } = await execAsync(`pgrep -P ${ttydPid} | xargs -I {} sh -c 'ps -p {} -o comm= | grep -q "tmux:" && echo {}'`);
-      
-      if (!clientPids.trim()) {
-        logger.warn('No tmux client found under TTYd');
-        return [];
-      }
-      
-      const clients = [];
-      const pids = clientPids.trim().split('\n');
-      
-      for (const clientPid of pids) {
-        try {
-          // Get the pts connected to this client
-          const { stdout: lsofOutput } = await execAsync(`lsof -p ${clientPid} | grep pts`);
-          const ptsMatch = lsofOutput.match(/\/dev\/pts\/(\d+)/);
-          
-          if (ptsMatch) {
-            const ptsPath = `/dev/pts/${ptsMatch[1]}`;
-            clients.push(ptsPath);
+  static async getTTYdClients(maxRetries = 3) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        // Find TTYd process with multiple possible names
+        let ttydPid = null;
+        const possibleNames = ['ttyd.aarch64', 'ttyd'];
+        
+        for (const name of possibleNames) {
+          try {
+            const { stdout: ttydProcess } = await execAsync(`pgrep -f "${name}"`);
+            if (ttydProcess.trim()) {
+              ttydPid = ttydProcess.trim().split('\n')[0]; // Get first PID if multiple
+              break;
+            }
+          } catch (e) {
+            // Continue to next name
           }
-        } catch (error) {
-          logger.warn(`Failed to get pts for client ${clientPid}: ${error.message}`);
+        }
+        
+        if (!ttydPid) {
+          if (attempt < maxRetries - 1) {
+            logger.warn(`TTYd process not found, retrying in ${(attempt + 1) * 500}ms (attempt ${attempt + 1}/${maxRetries})`);
+            await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 500));
+            continue;
+          }
+          logger.warn('TTYd process not found after all retries');
+          return [];
+        }
+        
+        // Find tmux client processes under TTYd with improved detection
+        let clientPids = '';
+        try {
+          // Method 1: Direct child processes
+          const { stdout: directChildren } = await execAsync(`pgrep -P ${ttydPid}`);
+          if (directChildren.trim()) {
+            // Check if any are tmux processes
+            const { stdout: tmuxClients } = await execAsync(
+              `echo "${directChildren.trim()}" | xargs -I {} sh -c 'ps -p {} -o comm= 2>/dev/null | grep -q "tmux" && echo {}'`
+            );
+            clientPids = tmuxClients;
+          }
+        } catch (e) {
+          // Method 2: Search for tmux processes with TTYd as ancestor
+          try {
+            const { stdout: allTmux } = await execAsync(`pgrep tmux`);
+            for (const pid of allTmux.trim().split('\n').filter(Boolean)) {
+              try {
+                const { stdout: parent } = await execAsync(`ps -o ppid= -p ${pid}`);
+                if (parent.trim() === ttydPid) {
+                  clientPids += pid + '\n';
+                }
+              } catch (e) {
+                // Skip this PID
+              }
+            }
+          } catch (e) {
+            logger.warn('Failed to find tmux clients using fallback method');
+          }
+        }
+        
+        if (!clientPids.trim()) {
+          if (attempt < maxRetries - 1) {
+            logger.warn(`No tmux client found under TTYd, retrying in ${(attempt + 1) * 500}ms (attempt ${attempt + 1}/${maxRetries})`);
+            await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 500));
+            continue;
+          }
+          logger.warn('No tmux client found under TTYd after all retries');
+          return [];
+        }
+        
+        const clients = [];
+        const pids = clientPids.trim().split('\n').filter(Boolean);
+        
+        for (const clientPid of pids) {
+          try {
+            // Get the pts connected to this client with multiple methods
+            let ptsPath = null;
+            
+            // Method 1: lsof
+            try {
+              const { stdout: lsofOutput } = await execAsync(`lsof -p ${clientPid} 2>/dev/null | grep pts`);
+              const ptsMatch = lsofOutput.match(/\/dev\/pts\/(\d+)/);
+              if (ptsMatch) {
+                ptsPath = `/dev/pts/${ptsMatch[1]}`;
+              }
+            } catch (e) {
+              // Method 2: /proc filesystem
+              try {
+                const { stdout: fdLinks } = await execAsync(`ls -la /proc/${clientPid}/fd/ 2>/dev/null | grep pts`);
+                const ptsMatch = fdLinks.match(/\/dev\/pts\/(\d+)/);
+                if (ptsMatch) {
+                  ptsPath = `/dev/pts/${ptsMatch[1]}`;
+                }
+              } catch (e2) {
+                logger.warn(`Failed to get pts for client ${clientPid} using both methods`);
+              }
+            }
+            
+            if (ptsPath && !clients.includes(ptsPath)) {
+              clients.push(ptsPath);
+            }
+          } catch (error) {
+            logger.warn(`Failed to process client ${clientPid}: ${error.message}`);
+          }
+        }
+        
+        if (clients.length > 0) {
+          logger.info(`Found TTYd clients: ${clients.join(', ')} (attempt ${attempt + 1})`);
+          return clients;
+        } else if (attempt < maxRetries - 1) {
+          logger.warn(`No valid pts found, retrying in ${(attempt + 1) * 500}ms (attempt ${attempt + 1}/${maxRetries})`);
+          await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 500));
+        }
+      } catch (error) {
+        if (attempt < maxRetries - 1) {
+          logger.warn(`Error finding TTYd clients, retrying in ${(attempt + 1) * 500}ms: ${error.message}`);
+          await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 500));
+        } else {
+          logger.error(`Failed to get TTYd clients after ${maxRetries} attempts: ${error.message}`);
         }
       }
-      
-      logger.info(`Found TTYd clients: ${clients.join(', ')}`);
-      return clients;
+    }
+    return [];
+  }
+
+  // Verify which session a client is currently attached to
+  static async getCurrentSession(clientPath) {
+    try {
+      // Get the session name that this client is attached to
+      const { stdout } = await execAsync(`tmux display-message -c ${clientPath} -p '#S'`);
+      return stdout.trim();
     } catch (error) {
-      logger.error(`Failed to get TTYd clients: ${error.message}`);
-      return [];
+      logger.debug(`Failed to get current session for ${clientPath}: ${error.message}`);
+      return null;
     }
   }
 
-  static async switchToSession(sessionName, currentSessionName = null) {
-    try {
-      // First check if target session exists
-      const exists = await this.hasSession(sessionName);
-      if (!exists) {
-        logger.warn(`Target session ${sessionName} does not exist`);
-        return false;
+  // Verify that the session switch was successful
+  static async verifySessionSwitch(clientPath, targetSession, maxWaitMs = 3000) {
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < maxWaitMs) {
+      const currentSession = await this.getCurrentSession(clientPath);
+      if (currentSession === targetSession) {
+        return true;
       }
       
-      // Get all TTYd client paths
-      const ttydClients = await this.getTTYdClients();
-      if (ttydClients.length === 0) {
-        logger.warn('Cannot find any TTYd clients');
-        return false;
-      }
-      
-      logger.info(`Attempting to switch TTYd clients ${ttydClients.join(', ')} to ${sessionName}`);
-      
-      let success = false;
-      
-      // Try to switch all clients
-      for (const ttydClient of ttydClients) {
-        try {
-          // Method 1: Direct tmux command with specific client
-          await execAsync(`tmux switch-client -c ${ttydClient} -t ${sessionName} \\; send-keys C-l`);
-          logger.info(`Successfully switched TTYd client ${ttydClient} to ${sessionName} and cleared screen`);
-          success = true;
-        } catch (error) {
-          logger.warn(`Direct client switch failed for ${ttydClient}: ${error.message}, trying send-keys method`);
-          
-          // Method 2: Send keys to the specific client
-          try {
-            const switchCommand = `switch-client -t ${sessionName}`;
-            logger.info(`Sending keys to TTYd client ${ttydClient}: Ctrl+B : ${switchCommand}`);
-            
-            // Send Ctrl+B prefix
-            await execAsync(`tmux send-keys -t ${ttydClient} 'C-b'`);
-            await new Promise(resolve => setTimeout(resolve, 100));
-            
-            // Send : for command mode
-            await execAsync(`tmux send-keys -t ${ttydClient} ':'`);
-            await new Promise(resolve => setTimeout(resolve, 50));
-            
-            // Send the switch command
-            await execAsync(`tmux send-keys -t ${ttydClient} '${switchCommand}'`);
-            await new Promise(resolve => setTimeout(resolve, 50));
-            
-            // Send Enter to execute
-            await execAsync(`tmux send-keys -t ${ttydClient} 'Enter'`);
-            
-            // Small delay before clearing screen to show fresh prompt
-            await new Promise(resolve => setTimeout(resolve, 200));
-            
-            // Clear screen to show fresh prompt and current session state
-            await execAsync(`tmux send-keys -t ${ttydClient} 'C-l'`);
-            
-            logger.info(`Successfully sent switch command to TTYd client ${ttydClient} and cleared screen`);
-            success = true;
-          } catch (sendKeysError) {
-            logger.error(`Send-keys method failed for ${ttydClient}: ${sendKeysError.message}`);
+      // Wait a bit before checking again
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    
+    return false;
+  }
+
+  static async switchToSession(sessionName, currentSessionName = null, maxRetries = 3) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        // First check if target session exists
+        const exists = await this.hasSession(sessionName);
+        if (!exists) {
+          logger.warn(`Target session ${sessionName} does not exist`);
+          return false;
+        }
+        
+        // Get all TTYd client paths with retries
+        const ttydClients = await this.getTTYdClients(3);
+        if (ttydClients.length === 0) {
+          if (attempt < maxRetries - 1) {
+            logger.warn(`Cannot find any TTYd clients, retrying attempt ${attempt + 1}/${maxRetries}`);
+            await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 1000));
+            continue;
           }
+          logger.warn('Cannot find any TTYd clients after all retries');
+          return false;
+        }
+        
+        logger.info(`Attempting to switch TTYd clients ${ttydClients.join(', ')} to ${sessionName} (attempt ${attempt + 1})`);
+        
+        let overallSuccess = false;
+        
+        // Try to switch all clients
+        for (const ttydClient of ttydClients) {
+          let clientSuccess = false;
+          
+          // Check current session before switching
+          const currentSession = await this.getCurrentSession(ttydClient);
+          if (currentSession === sessionName) {
+            logger.info(`Client ${ttydClient} already on session ${sessionName}`);
+            clientSuccess = true;
+            overallSuccess = true;
+            continue;
+          }
+          
+          logger.info(`Switching client ${ttydClient} from '${currentSession}' to '${sessionName}'`);
+          
+          // Method 1: Direct tmux command with specific client
+          try {
+            await execAsync(`tmux switch-client -c ${ttydClient} -t ${sessionName}`);
+            
+            // Verify the switch worked
+            const verified = await this.verifySessionSwitch(ttydClient, sessionName, 2000);
+            if (verified) {
+              // Clear screen after successful switch
+              await execAsync(`tmux send-keys -c ${ttydClient} 'C-l'`);
+              logger.info(`Successfully switched TTYd client ${ttydClient} to ${sessionName} (verified)`);
+              clientSuccess = true;
+              overallSuccess = true;
+            } else {
+              logger.warn(`Direct switch command executed but verification failed for ${ttydClient}`);
+            }
+          } catch (error) {
+            logger.warn(`Direct client switch failed for ${ttydClient}: ${error.message}`);
+          }
+          
+          // Method 2: Send keys to the specific client (if Method 1 failed)
+          if (!clientSuccess) {
+            try {
+              const switchCommand = `switch-client -t ${sessionName}`;
+              logger.info(`Trying send-keys method for ${ttydClient}: Ctrl+B : ${switchCommand}`);
+              
+              // Send Ctrl+B prefix
+              await execAsync(`tmux send-keys -c ${ttydClient} 'C-b'`);
+              await new Promise(resolve => setTimeout(resolve, 150));
+              
+              // Send : for command mode
+              await execAsync(`tmux send-keys -c ${ttydClient} ':'`);
+              await new Promise(resolve => setTimeout(resolve, 100));
+              
+              // Send the switch command
+              await execAsync(`tmux send-keys -c ${ttydClient} '${switchCommand}'`);
+              await new Promise(resolve => setTimeout(resolve, 100));
+              
+              // Send Enter to execute
+              await execAsync(`tmux send-keys -c ${ttydClient} 'Enter'`);
+              
+              // Verify the switch worked
+              const verified = await this.verifySessionSwitch(ttydClient, sessionName, 3000);
+              if (verified) {
+                // Clear screen after successful switch
+                await new Promise(resolve => setTimeout(resolve, 300));
+                await execAsync(`tmux send-keys -c ${ttydClient} 'C-l'`);
+                logger.info(`Successfully switched TTYd client ${ttydClient} to ${sessionName} via send-keys (verified)`);
+                clientSuccess = true;
+                overallSuccess = true;
+              } else {
+                logger.error(`Send-keys method failed verification for ${ttydClient}`);
+              }
+            } catch (sendKeysError) {
+              logger.error(`Send-keys method failed for ${ttydClient}: ${sendKeysError.message}`);
+            }
+          }
+          
+          if (!clientSuccess) {
+            logger.error(`All methods failed for client ${ttydClient}`);
+          }
+        }
+        
+        if (overallSuccess) {
+          logger.info(`Successfully switched at least one client to ${sessionName}`);
+          return true;
+        } else if (attempt < maxRetries - 1) {
+          logger.warn(`All clients failed to switch, retrying attempt ${attempt + 2}/${maxRetries} in ${(attempt + 1) * 1000}ms`);
+          await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 1000));
+        }
+        
+      } catch (error) {
+        if (attempt < maxRetries - 1) {
+          logger.warn(`Error in switch attempt ${attempt + 1}, retrying: ${error.message}`);
+          await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 1000));
+        } else {
+          logger.error(`Failed to switch to session after ${maxRetries} attempts: ${error.message}`);
+        }
+      }
+    }
+    
+    return false;
+  }
+
+  // Check if any TTYd client is currently on base-session
+  static async isAnyClientOnBaseSession() {
+    try {
+      const ttydClients = await this.getTTYdClients(1); // Quick check, no retries
+      
+      for (const client of ttydClients) {
+        const currentSession = await this.getCurrentSession(client);
+        if (currentSession === 'base-session') {
+          return true;
         }
       }
       
-      return success;
-    } catch (error) {
-      logger.error(`Failed to switch to session: ${error.message}`);
       return false;
+    } catch (error) {
+      logger.debug(`Error checking base-session status: ${error.message}`);
+      return false; // Assume not on base-session if check fails
     }
   }
   
