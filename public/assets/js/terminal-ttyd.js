@@ -122,6 +122,9 @@ class TTYdTerminalManager {
 
         // 监听项目管理器事件
         this.setupProjectEventListeners();
+        
+        // Start base-session monitoring to prevent exposure
+        this.startBaseSessionMonitoring();
 
     }
 
@@ -214,6 +217,61 @@ class TTYdTerminalManager {
         waitForProjectManager();
     }
 
+    // Robust session state initialization without arbitrary delays
+    async initializeSessionState() {
+        console.log('🚀 Starting robust session initialization');
+        
+        try {
+            // Show loading state immediately
+            this.showTerminalLoading();
+            
+            // Wait for socket connection with timeout
+            await this.waitForSocketConnection(10000); // 10 second timeout
+            
+            // Get current session list
+            await this.refreshSessionList();
+            
+            // If we have sessions but no active session, try to activate one
+            if (this.sessions.size > 0 && !this.activeSessionName) {
+                const firstSession = Array.from(this.sessions.keys())[0];
+                await this.switchToSessionRobust(firstSession);
+            }
+            
+            // If still no active session, show welcome screen
+            if (!this.activeSessionName && this.sessions.size === 0) {
+                this.showWelcomeOrEmptyScreen();
+            }
+            
+        } catch (error) {
+            console.error('❌ Failed to initialize session state:', error);
+            this.showError('Failed to initialize terminal');
+        }
+    }
+    
+    // Wait for socket connection with timeout
+    async waitForSocketConnection(timeoutMs = 10000) {
+        return new Promise((resolve, reject) => {
+            if (window.socket && window.socket.isConnected()) {
+                resolve();
+                return;
+            }
+            
+            const startTime = Date.now();
+            
+            const checkConnection = () => {
+                if (window.socket && window.socket.isConnected()) {
+                    resolve();
+                } else if (Date.now() - startTime > timeoutMs) {
+                    reject(new Error('Socket connection timeout'));
+                } else {
+                    setTimeout(checkConnection, 100);
+                }
+            };
+            
+            checkConnection();
+        });
+    }
+
     async refreshSessionList(sessionToActivate = null) {
         if (!window.socket) {
             console.warn('⚠️ Socket.IO not available, cannot refresh session list');
@@ -250,25 +308,12 @@ class TTYdTerminalManager {
             
             // 优先激活指定的session (新创建的session)
             if (sessionToActivate && this.sessions.has(sessionToActivate)) {
-                // 在切换到新创建的session期间显示loading状态
-                this._isSwitchingSession = true;
-                this.showTerminalLoading();
-                setTimeout(() => {
-                    this.switchToSession(sessionToActivate);
-                }, 1000); // 延迟1秒确保TTYd稳定
+                await this.switchToSessionRobust(sessionToActivate);
             }
-            // 如果没有活跃session但有sessions存在，延迟激活第一个(但不在恢复模式下)
+            // 如果没有活跃session但有sessions存在，激活第一个(但不在恢复模式下)
             else if (!this.activeSessionName && this.sessions.size > 0 && !this._isRestoring) {
                 const firstSession = Array.from(this.sessions.keys())[0];
-                // 在自动切换期间继续显示loading状态
-                this._isSwitchingSession = true;
-                this.showTerminalLoading();
-                setTimeout(() => {
-                    this.switchToSession(firstSession);
-                }, 1000); // 额外延迟1秒确保系统稳定
-            } else if (this._isRestoring) {
-                // 在恢复模式下也显示loading状态
-                this.showTerminalLoading();
+                await this.switchToSessionRobust(firstSession);
             }
             
             // 如果没有任何session，显示欢迎屏幕
@@ -492,6 +537,124 @@ class TTYdTerminalManager {
                 console.error('Failed to switch session after multiple attempts');
             }
         }
+    }
+
+    // Robust session switching with proper verification
+    async switchToSessionRobust(sessionName) {
+        if (!this.sessions.has(sessionName)) {
+            console.error('❌ Session not found:', sessionName);
+            return false;
+        }
+
+        console.log(`🔄 Starting robust switch to session: ${sessionName}`);
+
+        // Reset copy mode state and stop continuous scrolling when switching sessions
+        this.isInCopyMode = false;
+        this.hideCopyModeExitButton();
+        this.stopContinuousScroll();
+
+        // 获取当前活动的session名称
+        const currentSessionName = this.activeSessionName;
+
+        // 如果已经是当前活动session，只更新UI
+        if (sessionName === currentSessionName) {
+            this.updateTabStyles();
+            this.hideWelcomeScreen();
+            this.showIframe();
+            console.log(`✅ Already on session ${sessionName}`);
+            return true;
+        }
+
+        // Mark as switching and show loading
+        this._isSwitchingSession = true;
+        this.hideWelcomeScreen();
+        this.showTerminalLoading();
+
+        try {
+            // Auto-select corresponding project when switching to a terminal
+            if (!this._skipProjectAutoSelect) {
+                this.autoSelectProject(sessionName);
+            }
+
+            // Attempt to switch via WebSocket with verification
+            if (window.socket && window.socket.isConnected()) {
+                const success = await this.switchViaWebSocket(sessionName, currentSessionName);
+                if (success) {
+                    // Update UI state
+                    this.activeSessionName = sessionName;
+                    this.updateTabStyles();
+                    this.showScrollControls();
+                    this._isSwitchingSession = false;
+                    this.showIframe();
+                    console.log(`✅ Successfully switched to session: ${sessionName}`);
+                    return true;
+                }
+            }
+
+            throw new Error('WebSocket switch failed or not available');
+
+        } catch (error) {
+            console.error(`❌ Failed to switch to session ${sessionName}:`, error);
+            this._isSwitchingSession = false;
+            
+            // Don't show base-session on failure - show error or keep loading
+            this.showError(`Failed to switch to session ${sessionName}`);
+            return false;
+        }
+    }
+
+    // WebSocket-based session switching with timeout
+    async switchViaWebSocket(sessionName, currentSessionName, timeoutMs = 8000) {
+        return new Promise((resolve, reject) => {
+            let resolved = false;
+            
+            // Set up success handler
+            const successHandler = (data) => {
+                if (data.sessionName === sessionName && !resolved) {
+                    resolved = true;
+                    window.socket.off('terminal:session-switched', successHandler);
+                    window.socket.off('error', errorHandler);
+                    resolve(true);
+                }
+            };
+            
+            // Set up error handler
+            const errorHandler = (error) => {
+                if (!resolved) {
+                    resolved = true;
+                    window.socket.off('terminal:session-switched', successHandler);
+                    window.socket.off('error', errorHandler);
+                    reject(new Error(`Session switch error: ${error.message || error}`));
+                }
+            };
+            
+            // Set up timeout
+            const timeout = setTimeout(() => {
+                if (!resolved) {
+                    resolved = true;
+                    window.socket.off('terminal:session-switched', successHandler);
+                    window.socket.off('error', errorHandler);
+                    reject(new Error('Session switch timeout'));
+                }
+            }, timeoutMs);
+            
+            // Listen for events
+            window.socket.on('terminal:session-switched', successHandler);
+            window.socket.on('error', errorHandler);
+            
+            // Send the switch request
+            try {
+                window.socket.switchTerminalSession(sessionName, currentSessionName);
+            } catch (error) {
+                clearTimeout(timeout);
+                if (!resolved) {
+                    resolved = true;
+                    window.socket.off('terminal:session-switched', successHandler);
+                    window.socket.off('error', errorHandler);
+                    reject(error);
+                }
+            }
+        });
     }
 
     // Confirm before closing session to prevent accidental deletion
@@ -958,14 +1121,19 @@ class TTYdTerminalManager {
         // iframe会自动处理resize，无需特殊处理
     }
     
-    reloadTerminal() {
+    reloadTerminal(silent = false) {
         
         if (this.iframe) {
             // Save the current active session before reload
             const currentActiveSession = this.activeSessionName;
             
-            // 显示重启状态，避免用户看到base-session
-            this.showRestartingStatus();
+            // 显示重启状态，避免用户看到base-session (除非是静默模式)
+            if (!silent) {
+                this.showRestartingStatus();
+            } else {
+                // 静默模式：只显示loading状态，不显示重启页面
+                this.showTerminalLoading();
+            }
             
             // 清空当前活动session名称，确保后续强制切换
             this.activeSessionName = null;
@@ -2092,6 +2260,75 @@ class TTYdTerminalManager {
         }
     }
 
+    // Background monitoring to prevent base-session exposure
+    startBaseSessionMonitoring() {
+        // Only start monitoring if not already running
+        if (this.baseSessionMonitor) {
+            return;
+        }
+        
+        console.log('🔍 Starting base-session monitoring');
+        
+        this.baseSessionMonitor = setInterval(async () => {
+            try {
+                // Only check if we have user sessions and iframe is visible
+                if (this.sessions.size === 0 || !this.isInitialized) {
+                    return;
+                }
+                
+                // Check if any TTYd client is on base-session
+                if (window.socket && window.socket.isConnected()) {
+                    const isOnBaseSession = await this.checkIfOnBaseSession();
+                    
+                    if (isOnBaseSession) {
+                        console.warn('🚨 Detected base-session exposure, switching away immediately');
+                        
+                        // If we have an active session, switch to it
+                        if (this.activeSessionName && this.sessions.has(this.activeSessionName)) {
+                            await this.switchToSessionRobust(this.activeSessionName);
+                        }
+                        // Otherwise switch to first available session
+                        else if (this.sessions.size > 0) {
+                            const firstSession = Array.from(this.sessions.keys())[0];
+                            await this.switchToSessionRobust(firstSession);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.debug('Base-session monitoring error:', error);
+            }
+        }, 1000); // Check every second
+    }
+    
+    // Stop base-session monitoring
+    stopBaseSessionMonitoring() {
+        if (this.baseSessionMonitor) {
+            clearInterval(this.baseSessionMonitor);
+            this.baseSessionMonitor = null;
+            console.log('🔍 Stopped base-session monitoring');
+        }
+    }
+    
+    // Check if any client is currently on base-session
+    async checkIfOnBaseSession() {
+        try {
+            // Use the backend utility to check session status
+            const response = await fetch('/api/terminal/check-base-session', {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            if (response.ok) {
+                const result = await response.json();
+                return result.isOnBaseSession || false;
+            }
+        } catch (error) {
+            console.debug('Failed to check base-session status:', error);
+        }
+        
+        return false;
+    }
+
     // 清理资源
     destroy() {
         
@@ -2100,6 +2337,9 @@ class TTYdTerminalManager {
             clearInterval(this.refreshInterval);
             this.refreshInterval = null;
         }
+        
+        // 清理base-session监控
+        this.stopBaseSessionMonitoring();
         
         // 清理连续滚动定时器
         this.stopContinuousScroll();

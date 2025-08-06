@@ -464,9 +464,39 @@ class ClaudeCodeWebManager extends EventEmitter {
                 console.log('🎨 Verifying theme consistency with server...');
                 const response = await HTTP.get('/api/theme');
                 if (response.success && response.theme !== currentTheme) {
-                    console.log(`🎨 Theme mismatch detected! Server: ${response.theme}, Current: ${currentTheme}`);
-                    this.applyTheme(response.theme);
-                    console.log(`🎨 Theme synchronized with server: ${response.theme}`);
+                    console.log(`🎨 Theme mismatch detected! Server: ${response.theme}, Local: ${currentTheme}`);
+                    console.log(`🎨 Syncing local theme to server and restarting TTYd...`);
+                    
+                    try {
+                        // Sync local theme to server
+                        const themeResponse = await HTTP.post('/api/theme', { theme: currentTheme });
+                        if (themeResponse.success) {
+                            console.log(`🎨 Theme synced to server: ${currentTheme}`);
+                        }
+                        
+                        // Update TTYd configuration with the local theme
+                        const ttydResponse = await HTTP.post('/api/ttyd/config', { theme: currentTheme });
+                        if (ttydResponse.success) {
+                            console.log(`🎨 TTYd theme updated successfully`);
+                            
+                            // Ensure theme is saved to localStorage and UI is updated
+                            this.applyTheme(currentTheme);
+                            
+                            // Reload terminal iframe instead of refreshing the page (silent mode for theme sync)
+                            if (window.terminalManager && typeof window.terminalManager.reloadTerminal === 'function') {
+                                console.log(`🎨 Reloading terminal to apply theme...`);
+                                window.terminalManager.reloadTerminal(true); // silent = true
+                            } else {
+                                console.warn(`🎨 Terminal manager not available, skipping terminal reload`);
+                            }
+                        }
+                    } catch (error) {
+                        console.error(`🎨 Failed to sync theme:`, error);
+                        // Fall back to server theme on error
+                        this.applyTheme(response.theme);
+                    }
+                    
+                    console.log(`🎨 Theme initialization complete: ${currentTheme}`);
                 }
                 return;
             }
@@ -571,10 +601,10 @@ class ClaudeCodeWebManager extends EventEmitter {
     
     
     initializeSystemMonitoring() {
-        // Update system metrics periodically (optimized for Raspberry Pi)
+        // Update system metrics periodically (fast detection for connection issues)
         setInterval(() => {
             this.updateSystemMetrics();
-        }, 15000); // Reduced from 5s to 15s for better performance
+        }, 2000); // 2s interval for fast TTYd connection detection
         
         // Initial update
         this.updateSystemMetrics();
@@ -1420,6 +1450,28 @@ class ClaudeCodeWebManager extends EventEmitter {
                 newTerminalBtn.style.display = 'none';
                 console.log('New terminal button disabled - now hidden');
             }
+        }
+    }
+    
+    // Show notification helper method
+    showNotification(message, type = 'info') {
+        if (window.notifications) {
+            switch (type) {
+                case 'success':
+                    window.notifications.success(message);
+                    break;
+                case 'error':
+                    window.notifications.error(message);
+                    break;
+                case 'info':
+                case 'warn':
+                default:
+                    // Use success for info/warn as a fallback
+                    window.notifications.success(message);
+                    break;
+            }
+        } else {
+            console.log(`[${type.toUpperCase()}] ${message}`);
         }
     }
 }
