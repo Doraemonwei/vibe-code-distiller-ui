@@ -467,6 +467,12 @@ img[src*="assets/icons/"][src*=".png"] {
     font-size: var(--font-size-xl);
 }
 
+/* Make the logo circular */
+.app-title img.icon {
+    border-radius: 50%;
+    object-fit: cover;
+}
+
 .title-text {
     white-space: nowrap;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
