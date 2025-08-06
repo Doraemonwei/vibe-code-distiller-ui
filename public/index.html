@@ -87,22 +87,7 @@
             style.textContent = cssVarsText;
             document.head.appendChild(style);
             
-            // Async theme sync with server after page load
-            window.addEventListener('DOMContentLoaded', function() {
-                fetch('/api/theme')
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success && data.theme && data.theme !== cachedTheme) {
-                            localStorage.setItem('app-theme', data.theme);
-                            if (window.App && window.App.applyTheme) {
-                                window.App.applyTheme(data.theme);
-                            }
-                        }
-                    })
-                    .catch(() => {
-                        // Silently fail - cached theme is already applied
-                    });
-            });
+            // Theme sync is now handled by app.js initializeTheme() to avoid race conditions
         })();
     </script>
 </head>
