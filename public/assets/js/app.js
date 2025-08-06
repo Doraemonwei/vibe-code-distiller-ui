@@ -482,10 +482,10 @@ class ClaudeCodeWebManager extends EventEmitter {
                             // Ensure theme is saved to localStorage and UI is updated
                             this.applyTheme(currentTheme);
                             
-                            // Reload terminal iframe instead of refreshing the page
+                            // Reload terminal iframe instead of refreshing the page (silent mode for theme sync)
                             if (window.terminalManager && typeof window.terminalManager.reloadTerminal === 'function') {
                                 console.log(`🎨 Reloading terminal to apply theme...`);
-                                window.terminalManager.reloadTerminal();
+                                window.terminalManager.reloadTerminal(true); // silent = true
                             } else {
                                 console.warn(`🎨 Terminal manager not available, skipping terminal reload`);
                             }

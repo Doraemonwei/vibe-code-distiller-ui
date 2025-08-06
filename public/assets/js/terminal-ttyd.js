@@ -958,14 +958,19 @@ class TTYdTerminalManager {
         // iframe会自动处理resize，无需特殊处理
     }
     
-    reloadTerminal() {
+    reloadTerminal(silent = false) {
         
         if (this.iframe) {
             // Save the current active session before reload
             const currentActiveSession = this.activeSessionName;
             
-            // 显示重启状态，避免用户看到base-session
-            this.showRestartingStatus();
+            // 显示重启状态，避免用户看到base-session (除非是静默模式)
+            if (!silent) {
+                this.showRestartingStatus();
+            } else {
+                // 静默模式：只显示loading状态，不显示重启页面
+                this.showTerminalLoading();
+            }
             
             // 清空当前活动session名称，确保后续强制切换
             this.activeSessionName = null;
