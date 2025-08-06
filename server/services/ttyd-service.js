@@ -21,6 +21,7 @@ class TTYdService {
             arguments: [
                 "-W", 
                 "-t", "disableLeaveAlert=true",
+                "-t", "disableReconnect=true",
                 "-t", "macOptionIsMeta=true",
                 "-t", "macOptionClickForcesSelection=true"
             ]

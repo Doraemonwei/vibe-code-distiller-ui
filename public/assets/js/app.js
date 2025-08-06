@@ -601,10 +601,10 @@ class ClaudeCodeWebManager extends EventEmitter {
     
     
     initializeSystemMonitoring() {
-        // Update system metrics periodically (optimized for Raspberry Pi)
+        // Update system metrics periodically (fast detection for connection issues)
         setInterval(() => {
             this.updateSystemMetrics();
-        }, 15000); // Reduced from 5s to 15s for better performance
+        }, 2000); // 2s interval for fast TTYd connection detection
         
         // Initial update
         this.updateSystemMetrics();
