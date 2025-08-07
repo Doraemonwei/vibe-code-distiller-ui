@@ -197,6 +197,7 @@ const startServer = async () => {
     try {
       await ttydService.start();
       logger.info('TTYd service started successfully');
+      
     } catch (ttydError) {
       logger.error('Failed to start TTYd service:', ttydError);
       logger.error('Application will not start without TTYd service');
