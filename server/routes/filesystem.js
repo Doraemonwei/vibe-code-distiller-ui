@@ -5,7 +5,18 @@ const fs = require('fs').promises;
 const multer = require('multer');
 const { AppError, asyncHandler } = require('../middleware/error-handler');
 const { ERROR_CODES } = require('../utils/constants');
-const { isText, isBinary } = require('istextorbinary');
+// Simple text detection fallback
+const isText = (filename, buffer) => {
+    const textExts = ['.txt', '.js', '.ts', '.json', '.md', '.html', '.css', '.jsx', '.tsx', '.vue', '.py', '.sh', '.yml', '.yaml', '.xml', '.svg'];
+    const ext = require('path').extname(filename).toLowerCase();
+    if (textExts.includes(ext)) return true;
+    if (!buffer) return false;
+    // Simple binary detection - if buffer contains null bytes, it's likely binary
+    for (let i = 0; i < Math.min(512, buffer.length); i++) {
+        if (buffer[i] === 0) return false;
+    }
+    return true;
+};
 
 /**
  * Filesystem Routes - Support for absolute path browsing

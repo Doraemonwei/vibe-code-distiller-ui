@@ -2,6 +2,10 @@
 
 require('dotenv').config();
 
+// Disable Node config strict mode
+process.env.NODE_CONFIG_STRICT_MODE = 'false';
+delete process.env.NODE_APP_INSTANCE;
+
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');

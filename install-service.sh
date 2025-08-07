@@ -133,7 +133,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=forking
+Type=oneshot
+RemainAfterExit=yes
 User=${CURRENT_USER}
 Group=${CURRENT_USER}
 WorkingDirectory=${SCRIPT_DIR}
@@ -166,7 +167,8 @@ module.exports = {
     instances: 1,
     exec_mode: 'fork',
     env: {
-      NODE_ENV: 'production',
+      NODE_ENV: 'development',
+      NODE_CONFIG_STRICT_MODE: 'false',
       PORT: 3000
     },
     log_file: './logs/combined.log',
