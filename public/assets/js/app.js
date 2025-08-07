@@ -5,7 +5,7 @@ class ClaudeCodeWebManager extends EventEmitter {
         super();
         this.isInitialized = false;
         this.systemStats = {};
-        this.isHealthCheckOk = true; // Track health check status
+        this.isShowingDisconnectionUI = false; // Track if we're showing disconnection UI
         
         this.init();
     }
@@ -601,10 +601,10 @@ class ClaudeCodeWebManager extends EventEmitter {
     
     
     initializeSystemMonitoring() {
-        // Update system metrics periodically (fast detection for connection issues)
+        // Update system metrics periodically for system monitoring (CPU, memory, temperature)
         setInterval(() => {
             this.updateSystemMetrics();
-        }, 2000); // 2s interval for fast TTYd connection detection
+        }, 5000); // 5 seconds for system monitoring data (connection detection handled by Socket)
         
         // Initial update
         this.updateSystemMetrics();
@@ -615,41 +615,24 @@ class ClaudeCodeWebManager extends EventEmitter {
             const response = await HTTP.get('/api/system/status');
             
             if (response.success) {
-                // Health check succeeded
-                if (!this.isHealthCheckOk) {
-                    // Health check recovered - show reconnection message and refresh page
-                    console.log('🟢 Health check recovered, showing reconnection message and refreshing page');
-                    this.isHealthCheckOk = true;
-                    
-                    // Show reconnection message in terminal
-                    if (window.terminalManager && typeof window.terminalManager.showReconnectionMessage === 'function') {
-                        window.terminalManager.showReconnectionMessage();
-                    }
-                    
-                    // Refresh the page after a brief delay to show the message
-                    setTimeout(() => {
-                        console.log('🔄 Refreshing page after health check recovery');
-                        window.location.reload();
-                    }, 2000);
-                }
-                
+                // Update system monitoring data (CPU, memory, temperature)
                 this.systemStats = response.system;
                 this.updateSystemUI();
-            }
-        } catch (error) {
-            console.warn('Failed to get system status:', error);
-            
-            // Health check failed
-            if (this.isHealthCheckOk) {
-                // Health check just failed - show disconnection message in terminal
-                console.log('🔴 Health check failed, showing disconnection message in terminal');
-                this.isHealthCheckOk = false;
                 
-                // Show disconnection message in terminal
-                if (window.terminalManager && typeof window.terminalManager.showDisconnectionMessage === 'function') {
-                    window.terminalManager.showDisconnectionMessage();
+                // HTTP-based recovery mechanism: HTTP /api/system/status success is the single source of truth for recovery
+                // This ensures consistent recovery regardless of Socket state or timing issues
+                if (this.isShowingDisconnectionUI) {
+                    console.log('🟢 HTTP /api/system/status success detected during disconnection - triggering recovery');
+                    this.isShowingDisconnectionUI = false;
+                    
+                    // HTTP success = connection recovered, refresh page directly to restore full functionality
+                    console.log('🔄 Connection recovered via HTTP - refreshing page to restore functionality');
+                    window.location.reload();
                 }
             }
+        } catch (error) {
+            console.warn('Failed to get system metrics:', error);
+            // Connection detection is now handled by Socket events - no action needed here
         }
     }
     

@@ -70,6 +70,16 @@ class SocketClient extends EventEmitter {
             this.updateConnectionStatus();
             this.emit('disconnected', reason);
             
+            // Immediately show disconnection UI to prevent user from clicking around
+            console.log('🔴 Socket disconnected immediately, showing disconnection UI to prevent user interactions');
+            if (window.terminalManager && typeof window.terminalManager.showDisconnectionMessage === 'function') {
+                window.terminalManager.showDisconnectionMessage();
+            }
+            
+            // Mark that we're showing disconnection UI for backup recovery mechanism
+            if (window.app) {
+                window.app.isShowingDisconnectionUI = true;
+            }
             
             if (reason === 'io server disconnect') {
                 // Server initiated disconnect, try to reconnect
@@ -83,6 +93,18 @@ class SocketClient extends EventEmitter {
             this.updateConnectionStatus();
             this.emit('connection_error', error);
             
+            // Immediately show disconnection UI on first connection error to prevent user interactions
+            if (this.reconnectAttempts === 1) {
+                console.log('🔴 Socket connection error, showing disconnection UI to prevent user interactions');
+                if (window.terminalManager && typeof window.terminalManager.showDisconnectionMessage === 'function') {
+                    window.terminalManager.showDisconnectionMessage();
+                }
+                
+                // Mark that we're showing disconnection UI for backup recovery mechanism
+                if (window.app) {
+                    window.app.isShowingDisconnectionUI = true;
+                }
+            }
             
             if (this.reconnectAttempts >= this.maxReconnectAttempts) {
                 console.error('Failed to connect to server. Please check your connection.');
@@ -95,11 +117,15 @@ class SocketClient extends EventEmitter {
             this.updateConnectionStatus();
             this.emit('reconnected', attemptNumber);
             
+            // Socket reconnected - but don't trigger page refresh here
+            // Let HTTP /api/system/status handle the recovery detection and page refresh
+            console.log('🟢 Socket reconnected successfully, waiting for HTTP to confirm recovery');
+            
             // Rejoin current project if any with delay to ensure server is ready
             if (this.currentProject) {
                 setTimeout(() => {
                     this.joinProject(this.currentProject);
-                }, 2000); // Wait 2 seconds before rejoining
+                }, 1000);
             }
         });
         
