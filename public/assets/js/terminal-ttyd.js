@@ -123,8 +123,6 @@ class TTYdTerminalManager {
         // 监听项目管理器事件
         this.setupProjectEventListeners();
         
-        // Start base-session monitoring to prevent exposure
-        this.startBaseSessionMonitoring();
 
     }
 
@@ -761,7 +759,6 @@ class TTYdTerminalManager {
     }
 
     async createNewTerminal(projectName = null) {
-
         // 检查Socket.IO连接状态
         if (!window.socket || !window.socket.isConnected()) {
             console.error('❌ Socket.IO not connected, cannot create terminal session');
@@ -1039,19 +1036,18 @@ class TTYdTerminalManager {
             this.iframe.style.display = 'none';
         }
         
-        // Show disconnection message
+        // Show disconnection message with redesigned UI
         const welcomeContent = document.querySelector('.welcome-content');
         if (welcomeContent) {
             welcomeContent.innerHTML = `
-                <h2>🔴 Connection Lost</h2>
-                <p>Connection lost, reconnecting automatically...</p>
-                <div class="loading-spinner" style="margin: 20px auto; width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #dc3545; border-radius: 50%; animation: spin 1s linear infinite;"></div>
-                <style>
-                    @keyframes spin {
-                        0% { transform: rotate(0deg); }
-                        100% { transform: rotate(360deg); }
-                    }
-                </style>
+                <div class="terminal-loading-content">
+                    <div class="terminal-loading-icon">
+                        <img src="/assets/icons/x.svg" alt="Connection Lost" style="width: 48px; height: 48px; filter: var(--icon-filter);">
+                    </div>
+                    <h2 class="terminal-loading-title">Connection Lost</h2>
+                    <p class="terminal-loading-description">Connection lost, reconnecting automatically...</p>
+                    <div class="loading-spinner"></div>
+                </div>
             `;
         }
 
@@ -1059,35 +1055,6 @@ class TTYdTerminalManager {
         this.hideScrollControls();
     }
 
-    showReconnectionMessage() {
-        const welcomeScreen = document.getElementById('welcome-screen');
-        if (welcomeScreen) {
-            welcomeScreen.style.display = 'flex';
-        }
-        
-        if (this.iframe) {
-            this.iframe.style.display = 'none';
-        }
-        
-        // Show reconnection success message
-        const welcomeContent = document.querySelector('.welcome-content');
-        if (welcomeContent) {
-            welcomeContent.innerHTML = `
-                <h2>🟢 Reconnected Successfully</h2>
-                <p>Reconnected successfully, refreshing page...</p>
-                <div class="loading-spinner" style="margin: 20px auto; width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #28a745; border-radius: 50%; animation: spin 1s linear infinite;"></div>
-                <style>
-                    @keyframes spin {
-                        0% { transform: rotate(0deg); }
-                        100% { transform: rotate(360deg); }
-                    }
-                </style>
-            `;
-        }
-
-        // Hide scroll controls during reconnection
-        this.hideScrollControls();
-    }
 
 
     showRestartingStatus() {
@@ -1100,19 +1067,18 @@ class TTYdTerminalManager {
             this.iframe.style.display = 'none';
         }
         
-        // 修改welcome screen内容显示重启状态
+        // Show restart status with redesigned UI
         const welcomeContent = document.querySelector('.welcome-content');
         if (welcomeContent) {
             welcomeContent.innerHTML = `
-                <h2>🔄 TTYd Service Restarting</h2>
-                <p>Please wait while the terminal service is restarting...</p>
-                <div class="loading-spinner" style="margin: 20px auto; width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #007bff; border-radius: 50%; animation: spin 1s linear infinite;"></div>
-                <style>
-                    @keyframes spin {
-                        0% { transform: rotate(0deg); }
-                        100% { transform: rotate(360deg); }
-                    }
-                </style>
+                <div class="terminal-loading-content">
+                    <div class="terminal-loading-icon">
+                        <img src="/assets/icons/refresh.svg" alt="TTYd Service Restarting" style="width: 48px; height: 48px; filter: var(--icon-filter);">
+                    </div>
+                    <h2 class="terminal-loading-title">TTYd Service Restarting</h2>
+                    <p class="terminal-loading-description">Please wait while the terminal service is restarting...</p>
+                    <div class="loading-spinner"></div>
+                </div>
             `;
         }
     }
@@ -2260,74 +2226,8 @@ class TTYdTerminalManager {
         }
     }
 
-    // Background monitoring to prevent base-session exposure
-    startBaseSessionMonitoring() {
-        // Only start monitoring if not already running
-        if (this.baseSessionMonitor) {
-            return;
-        }
-        
-        console.log('🔍 Starting base-session monitoring');
-        
-        this.baseSessionMonitor = setInterval(async () => {
-            try {
-                // Only check if we have user sessions and iframe is visible
-                if (this.sessions.size === 0 || !this.isInitialized) {
-                    return;
-                }
-                
-                // Check if any TTYd client is on base-session
-                if (window.socket && window.socket.isConnected()) {
-                    const isOnBaseSession = await this.checkIfOnBaseSession();
-                    
-                    if (isOnBaseSession) {
-                        console.warn('🚨 Detected base-session exposure, switching away immediately');
-                        
-                        // If we have an active session, switch to it
-                        if (this.activeSessionName && this.sessions.has(this.activeSessionName)) {
-                            await this.switchToSessionRobust(this.activeSessionName);
-                        }
-                        // Otherwise switch to first available session
-                        else if (this.sessions.size > 0) {
-                            const firstSession = Array.from(this.sessions.keys())[0];
-                            await this.switchToSessionRobust(firstSession);
-                        }
-                    }
-                }
-            } catch (error) {
-                console.debug('Base-session monitoring error:', error);
-            }
-        }, 1000); // Check every second
-    }
     
-    // Stop base-session monitoring
-    stopBaseSessionMonitoring() {
-        if (this.baseSessionMonitor) {
-            clearInterval(this.baseSessionMonitor);
-            this.baseSessionMonitor = null;
-            console.log('🔍 Stopped base-session monitoring');
-        }
-    }
     
-    // Check if any client is currently on base-session
-    async checkIfOnBaseSession() {
-        try {
-            // Use the backend utility to check session status
-            const response = await fetch('/api/terminal/check-base-session', {
-                method: 'GET',
-                headers: { 'Content-Type': 'application/json' }
-            });
-            
-            if (response.ok) {
-                const result = await response.json();
-                return result.isOnBaseSession || false;
-            }
-        } catch (error) {
-            console.debug('Failed to check base-session status:', error);
-        }
-        
-        return false;
-    }
 
     // 清理资源
     destroy() {
@@ -2338,8 +2238,6 @@ class TTYdTerminalManager {
             this.refreshInterval = null;
         }
         
-        // 清理base-session监控
-        this.stopBaseSessionMonitoring();
         
         // 清理连续滚动定时器
         this.stopContinuousScroll();
