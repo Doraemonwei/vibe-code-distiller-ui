@@ -48,40 +48,29 @@ class TmuxUtils {
       await execAsync(`tmux set-option -t ${sessionName} exit-empty off`); // Don't exit when all windows are closed
       await execAsync(`tmux set-option -t ${sessionName} detach-on-destroy off`); // Don't detach when session destroyed
       
-      // Set reasonable limits for web use
-      await execAsync(`tmux set-option -t ${sessionName} history-limit 10000`);
-      
-      // Set environment variables in the session to prevent shell timeout
-      await execAsync(`tmux set-environment -t ${sessionName} TMOUT ""`); // Disable bash timeout
-      await execAsync(`tmux set-environment -t ${sessionName} TERM xterm-256color`);
-      
-      logger.info(`Created persistent tmux session: ${sessionName}`);
       return true;
     } catch (error) {
-      logger.error(`Failed to create tmux session: ${error.message}`);
-      throw error;
+      logger.error(`Failed to create session ${sessionName}:`, error.message);
+      return false;
     }
   }
   
   static async listSessions() {
     try {
       const { stdout } = await execAsync('tmux list-sessions -F "#{session_name}"');
-      const sessions = stdout.trim().split('\n').filter(Boolean);
-      return sessions.filter(session => session.startsWith(this.SESSION_PREFIX));
+      const sessions = stdout.trim().split('\n').filter(name => name.startsWith(this.SESSION_PREFIX));
+      return sessions;
     } catch (error) {
-      if (error.message.includes('no server running') || 
-          error.message.includes('No such file or directory')) {
-        return [];
-      }
-      throw error;
+      // No sessions exist
+      return [];
     }
   }
   
   static async getNextSequenceNumber(projectId) {
     try {
       const sessions = await this.listSessions();
-      const projectSessions = sessions.filter(session => {
-        const parsed = this.parseSessionName(session);
+      const projectSessions = sessions.filter(name => {
+        const parsed = this.parseSessionName(name);
         return parsed && parsed.projectId === projectId;
       });
       
@@ -89,28 +78,30 @@ class TmuxUtils {
         return 1;
       }
       
-      const sequenceNumbers = projectSessions.map(session => {
-        const parsed = this.parseSessionName(session);
+      const sequenceNumbers = projectSessions.map(name => {
+        const parsed = this.parseSessionName(name);
         return parsed ? parsed.identifier : 0;
-      }).filter(num => num > 0 && num < 1000000000); // Filter out timestamps
+      }).filter(num => num > 0 && num < 1000000); // Filter out timestamps
       
-      return sequenceNumbers.length > 0 ? Math.max(...sequenceNumbers) + 1 : 1;
+      if (sequenceNumbers.length === 0) {
+        return 1;
+      }
+      
+      return Math.max(...sequenceNumbers) + 1;
     } catch (error) {
-      logger.error(`Failed to get next sequence number: ${error.message}`);
+      logger.error('Error getting next sequence number:', error.message);
       return 1;
     }
   }
   
   static async getSessionInfo(sessionName) {
     try {
-      const { stdout } = await execAsync(
-        `tmux list-sessions -F "#{session_name}:#{session_created}:#{session_attached}" | grep "^${sessionName}:"`
-      );
-      const [name, created, attached] = stdout.trim().split(':');
+      const { stdout } = await execAsync(`tmux list-sessions -F "#{session_name},#{session_windows},#{session_created}" | grep "^${sessionName},"`);
+      const [name, windows, created] = stdout.trim().split(',');
       return {
         name,
-        created: new Date(parseInt(created) * 1000),
-        attached: attached === '1'
+        windows: parseInt(windows),
+        created: new Date(parseInt(created) * 1000)
       };
     } catch (error) {
       return null;
@@ -120,354 +111,173 @@ class TmuxUtils {
   static async killSession(sessionName) {
     try {
       await execAsync(`tmux kill-session -t ${sessionName}`);
-      logger.info(`Killed tmux session: ${sessionName}`);
       return true;
     } catch (error) {
-      if (error.message.includes("can't find session")) {
-        logger.debug(`Tmux session already gone: ${sessionName}`);
-        return true; // Session doesn't exist, which is what we wanted
-      }
-      logger.error(`Failed to kill tmux session: ${error.message}`);
+      logger.error(`Failed to kill session ${sessionName}:`, error.message);
       return false;
     }
   }
   
   static async sendTmuxCommand(sessionName, command) {
     try {
-      logger.info(`Sending tmux command sequence to ${sessionName}: ${command}`);
+      // Send a command to the terminal in the session
+      // Use tmux send-keys with -l flag for literal interpretation
+      logger.info(`Sending command to session ${sessionName}: ${command.substring(0, 100)}${command.length > 100 ? '...' : ''}`);
       
-      // Method 1: Try sending all keys in one command (most reliable)
-      try {
-        await execAsync(`tmux send-keys -t ${sessionName} 'C-b' ':' '${command}' 'Enter'`);
-        logger.info(`Successfully sent tmux command sequence to ${sessionName}`);
-        return true;
-      } catch (error) {
-        logger.warn(`Single command failed, trying step-by-step approach: ${error.message}`);
+      // Check if session exists first
+      const sessionExists = await this.hasSession(sessionName);
+      if (!sessionExists) {
+        logger.error(`Cannot send command - session ${sessionName} does not exist`);
+        return false;
       }
       
-      // Method 2: Step-by-step with delays (fallback)
-      // Send Ctrl+B (tmux prefix key)
-      await execAsync(`tmux send-keys -t ${sessionName} 'C-b'`);
-      
-      // Small delay to ensure tmux processes the prefix key
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Send ':' to enter command mode
-      await execAsync(`tmux send-keys -t ${sessionName} ':'`);
-      
-      // Small delay to ensure command mode is activated
-      await new Promise(resolve => setTimeout(resolve, 50));
-      
-      // Send the actual command
-      await execAsync(`tmux send-keys -t ${sessionName} '${command}'`);
-      
-      // Small delay before sending Enter
-      await new Promise(resolve => setTimeout(resolve, 50));
-      
-      // Send Enter to execute
-      await execAsync(`tmux send-keys -t ${sessionName} 'Enter'`);
-      
-      logger.info(`Successfully sent tmux command with delays to ${sessionName}: ${command}`);
-      return true;
+      try {
+        // Method 1: Direct command execution (for simple commands)
+        if (!command.includes('\\n') && !command.includes('|') && !command.includes(';') && !command.includes('&&')) {
+          await execAsync(`tmux send-keys -t ${sessionName} "${command}" Enter`);
+          logger.debug(`Sent command using direct method: ${command}`);
+        } else {
+          // Method 2: Literal mode for complex commands (safer for special characters)
+          await execAsync(`tmux send-keys -t ${sessionName} -l "${command}"`);
+          await execAsync(`tmux send-keys -t ${sessionName} Enter`);
+          logger.debug(`Sent command using literal method: ${command}`);
+        }
+        return true;
+      } catch (sendError) {
+        logger.error(`Failed to send command to session ${sessionName}:`, sendError.message);
+        return false;
+      }
     } catch (error) {
-      logger.error(`Failed to send tmux command to session: ${error.message}`);
+      logger.error(`Error in sendTmuxCommand for session ${sessionName}:`, error.message);
       return false;
     }
   }
   
-  // Terminal scrolling functions for copy mode
   static async enterCopyMode(sessionName) {
     try {
-      await execAsync(`tmux copy-mode -t "${sessionName}"`);
-      logger.info(`Entered copy mode for session: ${sessionName}`);
+      await execAsync(`tmux copy-mode -t ${sessionName}`);
       return true;
     } catch (error) {
-      logger.error(`Failed to enter copy mode: ${error.message}`);
-      return false;
-    }
-  }
-
-  static async exitCopyMode(sessionName) {
-    try {
-      await execAsync(`tmux send-keys -t "${sessionName}" 'q'`);
-      logger.info(`Exited copy mode for session: ${sessionName}`);
-      return true;
-    } catch (error) {
-      logger.error(`Failed to exit copy mode: ${error.message}`);
-      return false;
-    }
-  }
-
-  static async scrollUp(sessionName, lines = 'line') {
-    try {
-      let scrollCommand;
-      switch(lines) {
-        case 'line':
-          scrollCommand = 'Up';
-          break;
-        case 'page':
-          scrollCommand = 'PageUp';
-          break;
-        case 'halfpage':
-          scrollCommand = 'C-u';
-          break;
-        default:
-          // Custom number of lines, send multiple Up keys
-          for(let i = 0; i < parseInt(lines); i++) {
-            await execAsync(`tmux send-keys -t "${sessionName}" 'Up'`);
-          }
-          return true;
-      }
-      
-      await execAsync(`tmux send-keys -t "${sessionName}" '${scrollCommand}'`);
-      return true;
-    } catch (error) {
-      logger.error(`Failed to scroll up: ${error.message}`);
-      return false;
-    }
-  }
-
-  static async scrollDown(sessionName, lines = 'line') {
-    try {
-      let scrollCommand;
-      switch(lines) {
-        case 'line':
-          scrollCommand = 'Down';
-          break;
-        case 'page':
-          scrollCommand = 'PageDown';
-          break;
-        case 'halfpage':
-          scrollCommand = 'C-d';
-          break;
-        default:
-          // Custom number of lines, send multiple Down keys
-          for(let i = 0; i < parseInt(lines); i++) {
-            await execAsync(`tmux send-keys -t "${sessionName}" 'Down'`);
-          }
-          return true;
-      }
-      
-      await execAsync(`tmux send-keys -t "${sessionName}" '${scrollCommand}'`);
-      return true;
-    } catch (error) {
-      logger.error(`Failed to scroll down: ${error.message}`);
-      return false;
-    }
-  }
-
-  // Check if session is in copy mode
-  static async isInCopyMode(sessionName) {
-    try {
-      const { stdout } = await execAsync(`tmux display-message -t "${sessionName}" -p '#{pane_in_mode}'`);
-      return stdout.trim() === '1';
-    } catch (error) {
-      logger.error(`Failed to check copy mode status: ${error.message}`);
-      return false;
-    }
-  }
-
-  // Enhanced method: intelligently manage copy mode and scroll with better down scrolling support
-  static async scrollInCopyMode(sessionName, direction, lines = 'line') {
-    try {
-      // Check if already in copy mode to avoid unnecessary mode entry
-      const alreadyInCopyMode = await this.isInCopyMode(sessionName);
-      
-      if (!alreadyInCopyMode) {
-        await this.enterCopyMode(sessionName);
-        // Longer delay to ensure copy mode is fully active
-        await new Promise(resolve => setTimeout(resolve, 150));
-      }
-      
-      // Execute scroll based on direction - use same simple logic for both directions
-      if (direction === 'up') {
-        await this.scrollUp(sessionName, lines);
-      } else {
-        await this.scrollDown(sessionName, lines);
-      }
-      
-      return true;
-    } catch (error) {
-      logger.error(`Failed to scroll in copy mode: ${error.message}`);
-      return false;
-    }
-  }
-
-
-  // Go to bottom in copy mode and exit
-  static async goToBottomAndExit(sessionName) {
-    try {
-      // Send Shift+G to jump to bottom in copy mode
-      await execAsync(`tmux send-keys -t "${sessionName}" 'S-g'`);
-      logger.info(`Jumped to bottom in copy mode for session: ${sessionName}`);
-      
-      // Small delay to ensure the jump is processed
-      await new Promise(resolve => setTimeout(resolve, 200));
-      
-      // Exit copy mode
-      await this.exitCopyMode(sessionName);
-      
-      return true;
-    } catch (error) {
-      logger.error(`Failed to go to bottom and exit copy mode: ${error.message}`);
+      logger.debug(`Failed to enter copy mode for ${sessionName}:`, error.message);
       return false;
     }
   }
   
-  static async getTTYdClients(maxRetries = 3) {
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        // Find TTYd process with multiple possible names
-        let ttydPid = null;
-        const possibleNames = ['ttyd.aarch64', 'ttyd'];
-        
-        for (const name of possibleNames) {
-          try {
-            const { stdout: ttydProcess } = await execAsync(`pgrep -f "${name}"`);
-            if (ttydProcess.trim()) {
-              ttydPid = ttydProcess.trim().split('\n')[0]; // Get first PID if multiple
-              break;
-            }
-          } catch (e) {
-            // Continue to next name
-          }
-        }
-        
-        if (!ttydPid) {
-          if (attempt < maxRetries - 1) {
-            logger.warn(`TTYd process not found, retrying in ${(attempt + 1) * 500}ms (attempt ${attempt + 1}/${maxRetries})`);
-            await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 500));
-            continue;
-          }
-          logger.warn('TTYd process not found after all retries');
-          return [];
-        }
-        
-        // Find tmux client processes under TTYd with improved detection
-        let clientPids = '';
-        try {
-          // Method 1: Direct child processes
-          const { stdout: directChildren } = await execAsync(`pgrep -P ${ttydPid}`);
-          if (directChildren.trim()) {
-            // Check if any are tmux processes
-            const { stdout: tmuxClients } = await execAsync(
-              `echo "${directChildren.trim()}" | xargs -I {} sh -c 'ps -p {} -o comm= 2>/dev/null | grep -q "tmux" && echo {}'`
-            );
-            clientPids = tmuxClients;
-          }
-        } catch (e) {
-          // Method 2: Search for tmux processes with TTYd as ancestor
-          try {
-            const { stdout: allTmux } = await execAsync(`pgrep tmux`);
-            for (const pid of allTmux.trim().split('\n').filter(Boolean)) {
-              try {
-                const { stdout: parent } = await execAsync(`ps -o ppid= -p ${pid}`);
-                if (parent.trim() === ttydPid) {
-                  clientPids += pid + '\n';
-                }
-              } catch (e) {
-                // Skip this PID
-              }
-            }
-          } catch (e) {
-            logger.warn('Failed to find tmux clients using fallback method');
-          }
-        }
-        
-        if (!clientPids.trim()) {
-          if (attempt < maxRetries - 1) {
-            logger.warn(`No tmux client found under TTYd, retrying in ${(attempt + 1) * 500}ms (attempt ${attempt + 1}/${maxRetries})`);
-            await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 500));
-            continue;
-          }
-          logger.warn('No tmux client found under TTYd after all retries');
-          return [];
-        }
-        
-        const clients = [];
-        const pids = clientPids.trim().split('\n').filter(Boolean);
-        
-        for (const clientPid of pids) {
-          try {
-            // Get the pts connected to this client with multiple methods
-            let ptsPath = null;
-            
-            // Method 1: lsof
-            try {
-              const { stdout: lsofOutput } = await execAsync(`lsof -p ${clientPid} 2>/dev/null | grep pts`);
-              const ptsMatch = lsofOutput.match(/\/dev\/pts\/(\d+)/);
-              if (ptsMatch) {
-                ptsPath = `/dev/pts/${ptsMatch[1]}`;
-              }
-            } catch (e) {
-              // Method 2: /proc filesystem
-              try {
-                const { stdout: fdLinks } = await execAsync(`ls -la /proc/${clientPid}/fd/ 2>/dev/null | grep pts`);
-                const ptsMatch = fdLinks.match(/\/dev\/pts\/(\d+)/);
-                if (ptsMatch) {
-                  ptsPath = `/dev/pts/${ptsMatch[1]}`;
-                }
-              } catch (e2) {
-                logger.warn(`Failed to get pts for client ${clientPid} using both methods`);
-              }
-            }
-            
-            if (ptsPath && !clients.includes(ptsPath)) {
-              clients.push(ptsPath);
-            }
-          } catch (error) {
-            logger.warn(`Failed to process client ${clientPid}: ${error.message}`);
-          }
-        }
-        
-        if (clients.length > 0) {
-          logger.info(`Found TTYd clients: ${clients.join(', ')} (attempt ${attempt + 1})`);
-          return clients;
-        } else if (attempt < maxRetries - 1) {
-          logger.warn(`No valid pts found, retrying in ${(attempt + 1) * 500}ms (attempt ${attempt + 1}/${maxRetries})`);
-          await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 500));
-        }
-      } catch (error) {
-        if (attempt < maxRetries - 1) {
-          logger.warn(`Error finding TTYd clients, retrying in ${(attempt + 1) * 500}ms: ${error.message}`);
-          await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 500));
-        } else {
-          logger.error(`Failed to get TTYd clients after ${maxRetries} attempts: ${error.message}`);
-        }
-      }
-    }
-    return [];
-  }
-
-  // Verify which session a client is currently attached to
-  static async getCurrentSession(clientPath) {
+  static async exitCopyMode(sessionName) {
     try {
-      // Get the session name that this client is attached to
-      const { stdout } = await execAsync(`tmux display-message -c ${clientPath} -p '#S'`);
-      return stdout.trim();
+      await execAsync(`tmux send-keys -t ${sessionName} q`);
+      return true;
     } catch (error) {
-      logger.debug(`Failed to get current session for ${clientPath}: ${error.message}`);
-      return null;
+      logger.debug(`Failed to exit copy mode for ${sessionName}:`, error.message);
+      return false;
     }
   }
-
-  // Verify that the session switch was successful
-  static async verifySessionSwitch(clientPath, targetSession, maxWaitMs = 3000) {
-    const startTime = Date.now();
-    
-    while (Date.now() - startTime < maxWaitMs) {
-      const currentSession = await this.getCurrentSession(clientPath);
-      if (currentSession === targetSession) {
-        return true;
+  
+  static async scrollUp(sessionName, lines = 'line') {
+    try {
+      // Check if session is in copy mode, if not enter copy mode first
+      const inCopyMode = await this.isInCopyMode(sessionName);
+      if (!inCopyMode) {
+        await this.enterCopyMode(sessionName);
+        // Small delay to ensure copy mode is active
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
       
-      // Wait a bit before checking again
-      await new Promise(resolve => setTimeout(resolve, 200));
+      // Perform scrolling in copy mode
+      if (lines === 'page') {
+        await execAsync(`tmux send-keys -t ${sessionName} Page_Up`);
+      } else if (lines === 'halfpage') {
+        // Send multiple line ups for half page
+        for (let i = 0; i < 10; i++) {
+          await execAsync(`tmux send-keys -t ${sessionName} Up`);
+        }
+      } else {
+        // Default: scroll up by one line
+        await execAsync(`tmux send-keys -t ${sessionName} Up`);
+      }
+      
+      return true;
+    } catch (error) {
+      logger.error(`Scroll up failed for ${sessionName}:`, error.message);
+      return false;
     }
-    
-    return false;
+  }
+  
+  static async scrollDown(sessionName, lines = 'line') {
+    try {
+      // Check if session is in copy mode
+      const inCopyMode = await this.isInCopyMode(sessionName);
+      if (!inCopyMode) {
+        // If not in copy mode, we can't scroll down in history
+        logger.debug(`Session ${sessionName} not in copy mode, cannot scroll down in history`);
+        return false;
+      }
+      
+      // Perform scrolling in copy mode
+      if (lines === 'page') {
+        await execAsync(`tmux send-keys -t ${sessionName} Page_Down`);
+      } else if (lines === 'halfpage') {
+        // Send multiple line downs for half page
+        for (let i = 0; i < 10; i++) {
+          await execAsync(`tmux send-keys -t ${sessionName} Down`);
+        }
+      } else {
+        // Default: scroll down by one line
+        await execAsync(`tmux send-keys -t ${sessionName} Down`);
+      }
+      
+      return true;
+    } catch (error) {
+      logger.error(`Scroll down failed for ${sessionName}:`, error.message);
+      return false;
+    }
+  }
+  
+  static async isInCopyMode(sessionName) {
+    try {
+      const { stdout } = await execAsync(`tmux display-message -t ${sessionName} -p "#{pane_in_mode}"`);
+      return stdout.trim() === '1';
+    } catch (error) {
+      logger.debug(`Failed to check copy mode status for ${sessionName}:`, error.message);
+      return false;
+    }
+  }
+  
+  static async scrollInCopyMode(sessionName, direction, lines = 'line') {
+    try {
+      if (direction === 'up') {
+        return await this.scrollUp(sessionName, lines);
+      } else if (direction === 'down') {
+        return await this.scrollDown(sessionName, lines);
+      } else {
+        throw new Error(`Invalid scroll direction: ${direction}`);
+      }
+    } catch (error) {
+      logger.error(`Scroll in copy mode failed:`, error.message);
+      return false;
+    }
+  }
+  
+  static async goToBottomAndExit(sessionName) {
+    try {
+      // Check if in copy mode
+      const inCopyMode = await this.isInCopyMode(sessionName);
+      
+      if (inCopyMode) {
+        // Go to bottom (end of buffer) then exit copy mode
+        await execAsync(`tmux send-keys -t ${sessionName} G`); // Go to end in copy mode
+        await new Promise(resolve => setTimeout(resolve, 100));
+        await execAsync(`tmux send-keys -t ${sessionName} q`); // Exit copy mode
+      }
+      
+      return true;
+    } catch (error) {
+      logger.error(`Go to bottom and exit failed for ${sessionName}:`, error.message);
+      return false;
+    }
   }
 
+  // Switch to specific tmux session by finding and switching TTYd client
   static async switchToSession(sessionName, currentSessionName = null, maxRetries = 3) {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
@@ -478,113 +288,39 @@ class TmuxUtils {
           return false;
         }
         
-        // Get all TTYd client paths with retries
-        const ttydClients = await this.getTTYdClients(3);
-        if (ttydClients.length === 0) {
-          if (attempt < maxRetries - 1) {
-            logger.warn(`Cannot find any TTYd clients, retrying attempt ${attempt + 1}/${maxRetries}`);
-            await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 1000));
-            continue;
-          }
-          logger.warn('Cannot find any TTYd clients after all retries');
-          return false;
+        logger.info(`Switching to session ${sessionName} via direct tmux command (attempt ${attempt + 1}/${maxRetries})`);
+        
+        // Find TTYd client (connected to base-session)
+        const ttydClient = await this.findTTYdClient();
+        if (!ttydClient) {
+          throw new Error('Could not find TTYd client');
         }
         
-        logger.info(`Attempting to switch TTYd clients ${ttydClients.join(', ')} to ${sessionName} (attempt ${attempt + 1})`);
+        logger.debug(`Found TTYd client: ${ttydClient}`);
         
-        let overallSuccess = false;
+        // Switch the TTYd client to target session
+        await execAsync(`tmux switch-client -c ${ttydClient} -t ${sessionName}`);
         
-        // Try to switch all clients
-        for (const ttydClient of ttydClients) {
-          let clientSuccess = false;
-          
-          // Check current session before switching
-          const currentSession = await this.getCurrentSession(ttydClient);
-          if (currentSession === sessionName) {
-            logger.info(`Client ${ttydClient} already on session ${sessionName}`);
-            clientSuccess = true;
-            overallSuccess = true;
-            continue;
-          }
-          
-          logger.info(`Switching client ${ttydClient} from '${currentSession}' to '${sessionName}'`);
-          
-          // Method 1: Direct tmux command with specific client
-          try {
-            await execAsync(`tmux switch-client -c ${ttydClient} -t ${sessionName}`);
-            
-            // Verify the switch worked
-            const verified = await this.verifySessionSwitch(ttydClient, sessionName, 2000);
-            if (verified) {
-              // Clear screen after successful switch
-              await execAsync(`tmux send-keys -c ${ttydClient} 'C-l'`);
-              logger.info(`Successfully switched TTYd client ${ttydClient} to ${sessionName} (verified)`);
-              clientSuccess = true;
-              overallSuccess = true;
-            } else {
-              logger.warn(`Direct switch command executed but verification failed for ${ttydClient}`);
-            }
-          } catch (error) {
-            logger.warn(`Direct client switch failed for ${ttydClient}: ${error.message}`);
-          }
-          
-          // Method 2: Send keys to the specific client (if Method 1 failed)
-          if (!clientSuccess) {
-            try {
-              const switchCommand = `switch-client -t ${sessionName}`;
-              logger.info(`Trying send-keys method for ${ttydClient}: Ctrl+B : ${switchCommand}`);
-              
-              // Send Ctrl+B prefix
-              await execAsync(`tmux send-keys -c ${ttydClient} 'C-b'`);
-              await new Promise(resolve => setTimeout(resolve, 150));
-              
-              // Send : for command mode
-              await execAsync(`tmux send-keys -c ${ttydClient} ':'`);
-              await new Promise(resolve => setTimeout(resolve, 100));
-              
-              // Send the switch command
-              await execAsync(`tmux send-keys -c ${ttydClient} '${switchCommand}'`);
-              await new Promise(resolve => setTimeout(resolve, 100));
-              
-              // Send Enter to execute
-              await execAsync(`tmux send-keys -c ${ttydClient} 'Enter'`);
-              
-              // Verify the switch worked
-              const verified = await this.verifySessionSwitch(ttydClient, sessionName, 3000);
-              if (verified) {
-                // Clear screen after successful switch
-                await new Promise(resolve => setTimeout(resolve, 300));
-                await execAsync(`tmux send-keys -c ${ttydClient} 'C-l'`);
-                logger.info(`Successfully switched TTYd client ${ttydClient} to ${sessionName} via send-keys (verified)`);
-                clientSuccess = true;
-                overallSuccess = true;
-              } else {
-                logger.error(`Send-keys method failed verification for ${ttydClient}`);
-              }
-            } catch (sendKeysError) {
-              logger.error(`Send-keys method failed for ${ttydClient}: ${sendKeysError.message}`);
-            }
-          }
-          
-          if (!clientSuccess) {
-            logger.error(`All methods failed for client ${ttydClient}`);
-          }
+        // Wait a bit and verify the switch
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Send clear screen command for better UX
+        try {
+          await execAsync(`tmux send-keys -t ${ttydClient} 'C-l'`);
+        } catch (clearError) {
+          logger.debug('Failed to clear screen after switch:', clearError.message);
         }
         
-        if (overallSuccess) {
-          logger.info(`Successfully switched at least one client to ${sessionName}`);
-          return true;
-        } else if (attempt < maxRetries - 1) {
-          logger.warn(`All clients failed to switch, retrying attempt ${attempt + 2}/${maxRetries} in ${(attempt + 1) * 1000}ms`);
-          await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 1000));
-        }
+        logger.info(`Successfully switched TTYd client to session ${sessionName}`);
+        return true;
         
       } catch (error) {
         if (attempt < maxRetries - 1) {
-          logger.warn(`Error in switch attempt ${attempt + 1}, retrying: ${error.message}`);
+          logger.warn(`Switch attempt ${attempt + 1} failed, retrying: ${error.message}`);
           await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 1000));
         } else {
-          logger.error(`Failed to switch to session after ${maxRetries} attempts: ${error.message}`);
+          logger.error(`Failed to switch to session ${sessionName} after ${maxRetries} attempts: ${error.message}`);
+          return false;
         }
       }
     }
@@ -592,91 +328,93 @@ class TmuxUtils {
     return false;
   }
 
-  // Check if any TTYd client is currently on base-session
-  static async isAnyClientOnBaseSession() {
+  // Find the TTYd client (simplified approach - look for base-session client)
+  static async findTTYdClient() {
     try {
-      const ttydClients = await this.getTTYdClients(1); // Quick check, no retries
+      const { stdout: clients } = await execAsync('tmux list-clients');
       
-      for (const client of ttydClients) {
-        const currentSession = await this.getCurrentSession(client);
-        if (currentSession === 'base-session') {
-          return true;
+      // Look for client connected to base-session (that's the TTYd client)
+      const ttydClientLine = clients.trim().split('\n').find(line => 
+        line.includes('base-session') || line.includes(': base-session ')
+      );
+      
+      if (ttydClientLine) {
+        const ptsMatch = ttydClientLine.match(/\/dev\/pts\/(\d+)/);
+        if (ptsMatch) {
+          const ttyPts = `/dev/pts/${ptsMatch[1]}`;
+          logger.debug(`Found TTYd client at: ${ttyPts}`);
+          return ttyPts;
         }
       }
       
-      return false;
+      // Fallback: look for any client that might be TTYd
+      // TTYd clients often have specific terminal types
+      const fallbackClient = clients.trim().split('\n').find(line => 
+        line.includes('xterm-256color') && !line.includes('tmux-256color')
+      );
+      
+      if (fallbackClient) {
+        const ptsMatch = fallbackClient.match(/\/dev\/pts\/(\d+)/);
+        if (ptsMatch) {
+          const ttyPts = `/dev/pts/${ptsMatch[1]}`;
+          logger.debug(`Found potential TTYd client (fallback): ${ttyPts}`);
+          return ttyPts;
+        }
+      }
+      
+      logger.warn('Could not find TTYd client in tmux client list');
+      return null;
+      
     } catch (error) {
-      logger.debug(`Error checking base-session status: ${error.message}`);
-      return false; // Assume not on base-session if check fails
+      logger.error('Failed to find TTYd client:', error.message);
+      return null;
     }
   }
   
   static async capturePane(sessionName, includeHistory = true) {
     try {
-      // Capture with history buffer for full terminal content
-      // -S - : Start from beginning of history buffer
-      // -e : Include escape sequences for proper formatting
-      // -p : Print to stdout
-      const captureCmd = includeHistory 
-        ? `tmux capture-pane -t ${sessionName} -e -p -S -`
-        : `tmux capture-pane -t ${sessionName} -e -p`;
-      
-      const { stdout } = await execAsync(captureCmd);
-      
-      if (!stdout || !stdout.trim()) {
-        logger.debug(`No content captured for ${sessionName}`);
-        return '';
+      let captureCommand = `tmux capture-pane -t ${sessionName} -p`;
+      if (includeHistory) {
+        captureCommand += ' -S -'; // Include scrollback history
       }
       
-      // Remove excessive trailing newlines but keep the structure
-      const trimmed = stdout.replace(/\n{3,}$/, '\n');
-      
-      logger.debug(`Captured pane content for ${sessionName}:`, {
-        originalLength: stdout.length,
-        trimmedLength: trimmed.length,
-        includeHistory,
-        hasEscapeSequences: /\x1b\[/.test(trimmed),
-        preview: trimmed.substring(0, 200).replace(/\x1b\[[0-9;]*[mGKHFJST]/g, '<ESC>').replace(/\r?\n/g, '\\n')
-      });
-      
-      return trimmed;
+      const { stdout } = await execAsync(captureCommand);
+      return stdout;
     } catch (error) {
-      logger.error(`Failed to capture tmux pane: ${error.message}`);
-      return '';
+      logger.error(`Failed to capture pane for session ${sessionName}:`, error.message);
+      return null;
     }
   }
   
   static async getCursorPosition(sessionName) {
     try {
-      // Get exact cursor position using tmux built-in variables
-      const { stdout } = await execAsync(`tmux display-message -t ${sessionName} -p -F '#{cursor_x} #{cursor_y}'`);
-      const positions = stdout.trim().split(' ');
-      
-      if (positions.length === 2) {
-        const cursorX = parseInt(positions[0], 10);
-        const cursorY = parseInt(positions[1], 10);
-        
-        logger.debug(`Got cursor position for ${sessionName}: x=${cursorX}, y=${cursorY}`);
-        return { cursorX, cursorY };
-      }
-      
-      logger.warn(`Invalid cursor position format for ${sessionName}: ${stdout}`);
-      return null;
+      const { stdout } = await execAsync(`tmux display-message -t ${sessionName} -p "#{cursor_x},#{cursor_y}"`);
+      const [x, y] = stdout.trim().split(',').map(Number);
+      return { x, y };
     } catch (error) {
-      logger.error(`Failed to get cursor position for ${sessionName}: ${error.message}`);
-      return null;
+      logger.debug(`Failed to get cursor position for ${sessionName}:`, error.message);
+      return { x: 0, y: 0 };
     }
   }
   
   static async disableStatusBar(sessionName) {
     try {
-      // Disable tmux status bar to prevent delayed appearance in web terminal
       await execAsync(`tmux set-option -t ${sessionName} status off`);
-      logger.debug(`Disabled status bar for session: ${sessionName}`);
       return true;
     } catch (error) {
-      logger.error(`Failed to disable status bar for ${sessionName}: ${error.message}`);
-      throw error;
+      logger.error(`Failed to disable status bar for session ${sessionName}:`, error.message);
+      return false;
+    }
+  }
+
+  static async isAnyClientOnBaseSession() {
+    try {
+      const baseSessionExists = await this.hasSession('base-session');
+      return baseSessionExists;
+      
+    } catch (error) {
+      logger.debug('Failed to check base-session status:', error.message);
+      return false;
     }
   }
 }
