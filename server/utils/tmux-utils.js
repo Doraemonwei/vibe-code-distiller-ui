@@ -407,16 +407,6 @@ class TmuxUtils {
     }
   }
 
-  static async isAnyClientOnBaseSession() {
-    try {
-      const baseSessionExists = await this.hasSession('base-session');
-      return baseSessionExists;
-      
-    } catch (error) {
-      logger.debug('Failed to check base-session status:', error.message);
-      return false;
-    }
-  }
 }
 
 module.exports = TmuxUtils;
