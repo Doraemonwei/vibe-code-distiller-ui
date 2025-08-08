@@ -9,5 +9,9 @@
   "ttyd": {
     "port": 7681,
     "fontSize": 15
+  },
+  "vscode": {
+    "port": 8081,
+    "password": null
   }
 }
