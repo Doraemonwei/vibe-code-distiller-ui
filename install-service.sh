@@ -31,7 +31,10 @@ echo "📦 Installing system dependencies..."
 apt update -qq
 apt install -y lsof curl wget tmux
 
-echo "✅ System dependencies installed successfully!"
+echo "📥 Installing code-server..."
+curl -fsSL https://code-server.dev/install.sh | sh
+
+echo "✅ System dependencies and code-server installed successfully!"
 
 # Download TTYd binary if not present
 TTYD_BINARY="${SCRIPT_DIR}/ttyd.aarch64"

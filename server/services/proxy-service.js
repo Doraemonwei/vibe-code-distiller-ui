@@ -1,6 +1,7 @@
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const logger = require('../utils/logger');
 const ttydService = require('./ttyd-service');
+const codeServerService = require('./code-server-service');
 
 class ProxyService {
   constructor() {
@@ -42,8 +43,9 @@ class ProxyService {
 
   createCodeServerProxy() {
     return (req, res, next) => {
+      const codeServerPort = codeServerService.getStatus().port;
       const proxy = createProxyMiddleware({
-        target: 'http://127.0.0.1:8081',
+        target: `http://127.0.0.1:${codeServerPort}`,
         changeOrigin: true,
         pathRewrite: {
           '^/vscode': '',
@@ -54,8 +56,8 @@ class ProxyService {
         proxyTimeout: 30000,
         secure: false,
         headers: {
-          'Host': '127.0.0.1:8081',
-          'Origin': 'http://127.0.0.1:8081'
+          'Host': `127.0.0.1:${codeServerPort}`,
+          'Origin': `http://127.0.0.1:${codeServerPort}`
         },
         onProxyReq: (proxyReq, req, res) => {
           proxyReq.setHeader('X-Forwarded-For', req.ip || req.connection.remoteAddress);
@@ -107,8 +109,9 @@ class ProxyService {
       } else if (pathname.startsWith('/vscode')) {
         logger.debug('Forwarding code-server WebSocket upgrade to code-server');
         
+        const codeServerPort = codeServerService.getStatus().port;
         const wsProxy = createProxyMiddleware({
-          target: 'http://127.0.0.1:8081',
+          target: `http://127.0.0.1:${codeServerPort}`,
           changeOrigin: true,
           pathRewrite: {
             '^/vscode': '',
@@ -117,8 +120,8 @@ class ProxyService {
           logLevel: 'silent',
           secure: false,
           headers: {
-            'Host': '127.0.0.1:8081',
-            'Origin': 'http://127.0.0.1:8081'
+            'Host': `127.0.0.1:${codeServerPort}`,
+            'Origin': `http://127.0.0.1:${codeServerPort}`
           },
           onError: (err, req, socket) => {
             logger.error('Code-server WebSocket proxy error:', { error: err.message, url: req.url });
