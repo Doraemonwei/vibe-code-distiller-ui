@@ -190,6 +190,19 @@ class ProjectManager extends EventEmitter {
             }
         });
         
+        // Create VSCode button
+        const createVSCodeButton = DOM.create('button', {
+            className: 'project-create-vscode-btn btn-icon small',
+            html: '<img src="assets/icons/code.svg" alt="Open in VSCode" class="icon" style="width: 14px; height: 14px;">',
+            attributes: { 'title': 'Open in VSCode' }
+        });
+        
+        // Handle VSCode button click
+        DOM.on(createVSCodeButton, 'click', (e) => {
+            e.stopPropagation();
+            this.openInVSCode(project);
+        });
+        
         // Create New Terminal button
         const createTerminalButton = DOM.create('button', {
             className: 'project-create-terminal-btn btn-icon small',
@@ -207,6 +220,7 @@ class ProjectManager extends EventEmitter {
         const optionsContainer = DOM.create('div', {
             className: 'project-options-container'
         });
+        optionsContainer.appendChild(createVSCodeButton);
         optionsContainer.appendChild(createTerminalButton);
         optionsContainer.appendChild(optionsButton);
         optionsContainer.appendChild(optionsDropdown);
@@ -609,6 +623,31 @@ class ProjectManager extends EventEmitter {
         } catch (error) {
             console.error('Failed to open terminal:', error);
             console.error('Failed to open terminal: ' + error.message);
+        }
+    }
+    
+    openInVSCode(project) {
+        try {
+            if (!project || !project.path) {
+                console.error('Project path not available');
+                return;
+            }
+            
+            // Get current URL without query parameters or hash
+            const baseUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}`;
+            
+            // Remove any trailing slash and add VSCode path with folder parameter
+            const cleanBaseUrl = baseUrl.replace(/\/$/, '');
+            const vscodeUrl = `${cleanBaseUrl}/vscode/?folder=${encodeURIComponent(project.path)}`;
+            
+            // Open in new tab
+            window.open(vscodeUrl, '_blank');
+            
+            console.log(`Opening project "${project.name}" in VSCode: ${vscodeUrl}`);
+            
+        } catch (error) {
+            console.error('Failed to open VSCode:', error);
+            console.error('Failed to open VSCode: ' + error.message);
         }
     }
     

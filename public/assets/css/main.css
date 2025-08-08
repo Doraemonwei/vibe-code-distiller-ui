@@ -736,6 +736,25 @@ img[src*="assets/icons/"][src*=".png"] {
     border-color: var(--border-subtle);
 }
 
+.project-create-vscode-btn {
+    opacity: 0.6;
+    transition: opacity var(--transition-fast);
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid transparent;
+    flex-shrink: 0;
+}
+
+.project-item:hover .project-create-vscode-btn {
+    opacity: 1;
+}
+
+.project-create-vscode-btn:hover {
+    background-color: var(--accent-primary);
+    color: var(--text-primary);
+    border-color: var(--accent-secondary);
+}
+
 .project-create-terminal-btn {
     opacity: 0.6;
     transition: opacity var(--transition-fast);

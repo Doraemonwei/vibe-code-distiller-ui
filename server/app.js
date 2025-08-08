@@ -41,6 +41,7 @@ const proxyService = require('./services/proxy-service');
 const systemSetupService = require('./services/system-setup');
 const websocketManager = require('./services/websocket-manager');
 const ttydService = require('./services/ttyd-service');
+const codeServerService = require('./services/code-server-service');
 
 // Setup process error handlers
 setupProcessErrorHandlers();
@@ -204,6 +205,18 @@ const startServer = async () => {
       process.exit(1);
     }
     
+    // Start code-server service
+    logger.info('Starting code-server service...');
+    try {
+      await codeServerService.start();
+      logger.info('Code-server service started successfully');
+      
+    } catch (codeServerError) {
+      logger.error('Failed to start code-server service:', codeServerError);
+      logger.error('Application will not start without code-server service');
+      process.exit(1);
+    }
+    
     // Start HTTP server
     server.listen(port, host, () => {
       logger.system('Server started', {
@@ -249,6 +262,14 @@ const startServer = async () => {
         logger.info('TTYd service stopped');
       } catch (ttydError) {
         logger.error('Error stopping TTYd service:', ttydError);
+      }
+      
+      try {
+        logger.info('Stopping code-server service...');
+        await codeServerService.stop();
+        logger.info('Code-server service stopped');
+      } catch (codeServerError) {
+        logger.error('Error stopping code-server service:', codeServerError);
       }
       
       server.close(() => {
