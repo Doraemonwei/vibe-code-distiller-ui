@@ -43,7 +43,7 @@ class ProxyService {
   createCodeServerProxy() {
     return (req, res, next) => {
       const proxy = createProxyMiddleware({
-        target: 'https://127.0.0.1:8081',
+        target: 'http://127.0.0.1:8081',
         changeOrigin: true,
         pathRewrite: {
           '^/vscode': '',
@@ -84,7 +84,7 @@ class ProxyService {
     };
   }
 
-  setupWebSocketUpgrade(server, io) {
+  setupWebSocketUpgrade(server) {
     server.on('upgrade', (request, socket, head) => {
       const pathname = request.url;
       logger.debug('WebSocket upgrade request:', { pathname });
@@ -108,7 +108,7 @@ class ProxyService {
         logger.debug('Forwarding code-server WebSocket upgrade to code-server');
         
         const wsProxy = createProxyMiddleware({
-          target: 'https://127.0.0.1:8081',
+          target: 'http://127.0.0.1:8081',
           changeOrigin: true,
           pathRewrite: {
             '^/vscode': '',
