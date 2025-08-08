@@ -1,0 +1,11 @@
+{
+  "name": "Claude Code Chat",
+  "short_name": "Claude Chat",
+  "description": "Mobile interface for Claude Code",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#5c4cff",
+  "orientation": "portrait",
+  "icons": []
+}

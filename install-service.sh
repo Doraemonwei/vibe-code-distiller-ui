@@ -127,7 +127,7 @@ NPM_DIR=$(dirname "${NPM_PATH}")
 # Create new service file
 cat > "/etc/systemd/system/${SERVICE_FILE}" << EOF
 [Unit]
-Description=Claude Code Web Manager
+Description=Claude Code Web Manager - Unified Mobile & Desktop Interface
 Documentation=https://github.com/yourusername/claude-code-ui
 After=network-online.target
 Wants=network-online.target
@@ -237,6 +237,9 @@ echo "- PM2: Process manager"
 echo "- Systemd service: Auto-start on boot"
 echo ""
 echo "Features enabled:"
+echo "- Unified Mobile & Desktop Interfaces"
+echo "- Automatic device detection and routing"
+echo "- Mobile WebSocket chat integration"
 echo "- Persistent terminal sessions"
 echo "- Web-based terminal interface"
 echo "- Auto-start on system boot"

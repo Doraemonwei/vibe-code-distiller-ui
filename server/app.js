@@ -14,6 +14,7 @@ const compression = require('compression');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
+const session = require('express-session');
 const config = require('config');
 
 // Import utilities and middleware
@@ -44,6 +45,18 @@ const gitRoutes = require('./routes/git');
 const proxyService = require('./services/proxy-service');
 const systemSetupService = require('./services/system-setup');
 const websocketManager = require('./services/websocket-manager');
+
+// Import device detection middleware  
+const deviceDetection = require('./middleware/device-detection');
+
+// Import socket handler (if it exists)
+let socketHandler;
+try {
+  socketHandler = require('./socket-handler');
+} catch (e) {
+  // socket-handler might not exist in current version
+  socketHandler = null;
+}
 const ttydService = require('./services/ttyd-service');
 
 // Setup process error handlers
@@ -110,6 +123,9 @@ app.use(preflightRateLimit);
 app.use(corsWithLogging);
 app.use(securityHeaders);
 
+// Device detection middleware
+app.use(deviceDetection);
+
 // Body parsing middleware
 app.use(express.json({ 
   limit: '10mb',
@@ -132,8 +148,34 @@ app.use(express.urlencoded({
 // Cookie parsing
 app.use(cookieParser());
 
+// Session management for mobile project persistence
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'claude-code-mobile-session',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { 
+    secure: false, // Set to true if using HTTPS
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  }
+}));
+
 // Static files
 app.use('/assets', express.static(path.join(__dirname, '../public/assets')));
+
+// Mobile static files with proper MIME types
+app.use('/mobile', express.static(path.join(__dirname, '../public/mobile'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.css')) {
+      res.setHeader('Content-Type', 'text/css');
+    } else if (filePath.endsWith('.js')) {
+      res.setHeader('Content-Type', 'application/javascript');
+    } else if (filePath.endsWith('.json')) {
+      res.setHeader('Content-Type', 'application/json');
+    }
+  }
+}));
+
+// Monaco Editor static files
 app.use('/node_modules', express.static(path.join(__dirname, '../node_modules')));
 
 // Health check endpoint
@@ -162,9 +204,43 @@ app.use('/api/ttyd', ttydRoutes);
 app.use('/api/filesystem', filesystemRoutes);
 app.use('/api/git', gitRoutes);
 
-// Serve main application
+// Mobile project routes (mobile-only, desktop unaffected)
+app.get('/mobile/project/:projectName', (req, res) => {
+  const projectName = req.params.projectName;
+  logger.info(`Serving mobile interface for project: ${projectName}`);
+  
+  // Store project context for this request
+  req.mobileProjectName = projectName;
+  
+  res.sendFile(path.join(__dirname, '../public/mobile/index.html'));
+});
+
+// Mobile project redirect helper
+function getMobileProjectPath(req) {
+  // Try to get project from session or default to current working directory
+  const sessionProject = req.session?.mobileCurrentProject;
+  if (sessionProject && fs.existsSync(sessionProject)) {
+    return path.basename(sessionProject);
+  }
+  
+  // Fallback to current working directory name
+  return path.basename(process.cwd());
+}
+
+// Serve main application with device detection
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '../public/index.html'));
+  if (req.deviceInfo && req.deviceInfo.isMobile) {
+    // For mobile users, redirect to project-specific URL for better state management
+    const projectName = getMobileProjectPath(req);
+    const projectUrl = `/mobile/project/${projectName}`;
+    
+    logger.info(`Redirecting mobile user to project URL: ${projectUrl}`);
+    res.redirect(projectUrl);
+  } else {
+    // Serve desktop interface (unchanged)
+    logger.info(`Serving desktop interface to ${req.deviceInfo ? req.deviceInfo.browser : 'unknown'} on ${req.deviceInfo ? req.deviceInfo.os : 'unknown'}`);
+    res.sendFile(path.join(__dirname, '../public/index.html'));
+  }
 });
 
 // Serve other static files
@@ -174,7 +250,10 @@ app.use(express.static(path.join(__dirname, '../public'), {
 }));
 
 // Setup Socket.IO handlers
-websocketManager(io);
+const websocketManagerInstance = websocketManager(io);
+
+// Store websocket manager instance for access in routes
+app.set('websocketManager', websocketManagerInstance);
 
 // Setup WebSocket upgrade handling
 proxyService.setupWebSocketUpgrade(server, io);

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "claude-code-chat-permissions": {
+      "command": "node",
+      "args": [
+        "/home/distiller/vibe-code-distiller-ui/server/services/mcp-permissions.js"
+      ],
+      "env": {
+        "CLAUDE_PERMISSIONS_PATH": "/home/distiller/vibe-code-distiller-ui/.claude-code-chat/permission-requests"
+      }
+    }
+  }
+}

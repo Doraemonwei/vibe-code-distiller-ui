@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="theme-color" content="#FFFFFF">
+    <title>Claude Chat</title>
+    <link rel="stylesheet" href="/mobile/styles-notion-v2.css">
+    <link rel="manifest" href="/mobile/manifest.json">
+    <link rel="icon" type="image/x-icon" href="/mobile/favicon.ico">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header" id="appHeader">
+            <button class="icon-btn menu-btn" onclick="toggleSidebar()" aria-label="Menu">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M3 12h18M3 6h18M3 18h18" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+            <div class="app-title-container">
+                <h1 class="app-title">Claude Chat</h1>
+                <div class="current-project" id="currentProject">Loading...</div>
+            </div>
+            <div class="header-actions">
+                <span class="status-indicator" id="statusIndicator" aria-label="Connection status"></span>
+                <button class="icon-btn" onclick="newSession()" aria-label="New chat">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M12 5v14M5 12h14" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h2 class="sidebar-title">Workspace</h2>
+                <button class="icon-btn" onclick="toggleSidebar()" aria-label="Close sidebar">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M6 18L18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <button class="nav-item" onclick="showProjects()">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" width="20" height="20">
+                        <path d="M3 3h18v18H3zM3 9h18M9 21V9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span>Projects</span>
+                </button>
+                <button class="nav-item" onclick="showHistory()">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" width="20" height="20">
+                        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span>History</span>
+                </button>
+                <button class="nav-item" onclick="showSettings()">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" width="20" height="20">
+                        <circle cx="12" cy="12" r="3" stroke-width="2"/>
+                        <path d="M12 1v6m0 6v6m4.22-10.22l4.24-4.24m0 14.14l-4.24-4.24M20 12h-6m-6 0H1m16.24 4.24l-4.24-4.24m-6 6l-4.24-4.24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span>Settings</span>
+                </button>
+            </nav>
+        </aside>
+        
+        <!-- Sidebar Backdrop -->
+        <div class="sidebar-backdrop" onclick="closeSidebar()"></div>
+
+        <!-- Main Chat Area -->
+        <main class="chat-container">
+            <div class="messages" id="messages">
+                <div class="messages-inner">
+                    <div class="welcome-message">
+                        <h2>Welcome to Claude Chat</h2>
+                        <p>Start a conversation or load a previous session</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Input Area -->
+        <footer class="input-area">
+            <div class="input-container">
+                <div class="input-wrapper">
+                    <div class="input-actions">
+                        <button class="input-action-btn" onclick="showSlashCommands()" title="Commands" aria-label="Slash commands">
+                            <span>/</span>
+                        </button>
+                        <button class="input-action-btn" onclick="showFilePicker()" title="Reference file" aria-label="Reference files">
+                            <span>@</span>
+                        </button>
+                    </div>
+                    <textarea 
+                        id="messageInput" 
+                        class="message-input" 
+                        placeholder="Message Claude..."
+                        rows="1"
+                        aria-label="Message input"
+                    ></textarea>
+                    <button class="send-btn" id="sendBtn" onclick="sendMessage()" aria-label="Send message">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="20" height="20">
+                            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                    <button class="stop-btn" id="stopBtn" onclick="stopRequest()" style="display: none;" aria-label="Stop generation">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
+                            <rect x="6" y="6" width="12" height="12" rx="2"/>
+                        </svg>
+                    </button>
+                </div>
+                
+                <!-- Quick Actions -->
+                <div class="quick-actions" id="quickActions">
+                    <button class="quick-action" onclick="togglePlanMode()" id="planModeBtn">
+                        Plan Mode
+                    </button>
+                    <button class="quick-action" onclick="toggleThinkingMode()" id="thinkingModeBtn">
+                        Thinking
+                    </button>
+                </div>
+            </div>
+        </footer>
+
+        <!-- Modals -->
+        <!-- History Modal -->
+        <div class="modal" id="historyModal" role="dialog" aria-labelledby="historyTitle">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="historyTitle">Conversation History</h2>
+                    <button class="icon-btn" onclick="closeModal('historyModal')" aria-label="Close">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M6 18L18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="modal-body" id="historyList">
+                    <!-- History items will be loaded here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Files Modal -->
+        <div class="modal" id="filesModal" role="dialog" aria-labelledby="filesTitle">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="filesTitle">Reference Files</h2>
+                    <button class="icon-btn" onclick="closeModal('filesModal')" aria-label="Close">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M6 18L18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="file-search">
+                    <input 
+                        type="text" 
+                        id="fileSearch" 
+                        class="search-input" 
+                        placeholder="Search files..." 
+                        oninput="searchFiles(this.value)" 
+                        autocomplete="off"
+                        aria-label="Search files"
+                    >
+                </div>
+                <div class="modal-body" id="filesList">
+                    <!-- Files will be loaded here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Projects Modal -->
+        <div class="modal" id="projectsModal" role="dialog" aria-labelledby="projectsTitle">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="projectsTitle">Projects</h2>
+                    <button class="icon-btn" onclick="closeModal('projectsModal')" aria-label="Close">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M6 18L18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="modal-body" id="projectsList">
+                    <!-- Projects will be loaded here -->
+                </div>
+                <div class="modal-footer">
+                    <button class="create-project-btn" onclick="createNewProject()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="20" height="20">
+                            <path d="M12 5v14M5 12h14" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span>Create New Project</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div class="modal" id="settingsModal" role="dialog" aria-labelledby="settingsTitle">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="settingsTitle">Settings</h2>
+                    <button class="icon-btn" onclick="closeModal('settingsModal')" aria-label="Close">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M6 18L18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="setting-group">
+                        <label for="modelSelect">Model</label>
+                        <select id="modelSelect" class="setting-select" onchange="changeModel(this.value)">
+                            <option value="default">Default</option>
+                            <option value="claude-3-opus-20240229">Claude 3 Opus</option>
+                            <option value="claude-3-sonnet-20240229">Claude 3 Sonnet</option>
+                            <option value="claude-3-haiku-20240307">Claude 3 Haiku</option>
+                        </select>
+                    </div>
+                    <div class="setting-group">
+                        <label for="themeSelect">Theme</label>
+                        <select id="themeSelect" class="setting-select" onchange="changeTheme(this.value)">
+                            <option value="auto">Auto</option>
+                            <option value="light">Light</option>
+                            <option value="dark">Dark</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slash Commands Modal -->
+        <div class="modal slash-commands-modal" id="slashCommandsModal" role="dialog" aria-labelledby="slashTitle">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="slashTitle">Commands</h2>
+                    <button class="icon-btn" onclick="closeModal('slashCommandsModal')" aria-label="Close">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M6 18L18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="file-search">
+                    <input 
+                        type="text" 
+                        id="slashSearch" 
+                        class="search-input" 
+                        placeholder="Search commands..." 
+                        oninput="filterSlashCommands(this.value)" 
+                        autocomplete="off"
+                        aria-label="Search commands"
+                    >
+                </div>
+                <div class="modal-body" id="slashCommandsList">
+                    <!-- Commands will be loaded here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Container -->
+        <div class="toast-container" id="toastContainer" aria-live="polite" aria-atomic="true"></div>
+    </div>
+
+    <script src="/assets/libs/socket.io.min.js"></script>
+    <script src="/mobile/app.js"></script>
+</body>
+</html>
